@@ -520,7 +520,7 @@ func (manager *BackupManager) Backup(top string, quickMode bool, threads int, ta
 				}
 
 			},
-			func(fileSize int64, hash string) (io.Reader, bool) {
+			func(fileSize int64, hash string) (io.Reader, int64, bool) {
 
 				// Must lock here because the RunAtError function called by other threads may access uploadedEntries
 				uploadedChunkLock.Lock()
@@ -539,10 +539,15 @@ func (manager *BackupManager) Backup(top string, quickMode bool, threads int, ta
 				fileReader.NextFile()
 
 				if fileReader.CurrentFile != nil {
+					currentFileStats, statErr := fileReader.CurrentFile.Stat()
+					currentFileSize := int64(0)
+					if (nil == statErr) {
+						currentFileSize = currentFileStats.Size()
+					}
 					LOG_TRACE("PACK_START", "Packing %s", fileReader.CurrentEntry.Path)
-					return fileReader.CurrentFile, true
+					return fileReader.CurrentFile, currentFileSize, true
 				}
-				return nil, false
+				return nil, 0, false
 			})
 
 		chunkUploader.Stop()
@@ -979,14 +984,14 @@ func (encoder fileEncoder) Read(data []byte) (n int, err error) {
 
 // NextFile switchs to the next file and generates its json description in the buffer.  It also takes care of
 // the ending ']' and the commas between files.
-func (encoder *fileEncoder) NextFile() (io.Reader, bool) {
+func (encoder *fileEncoder) NextFile() (io.Reader, int64, bool) {
 	if encoder.currentIndex == len(encoder.files) {
-		return nil, false
+		return nil, 0, false
 	}
 	if encoder.currentIndex == len(encoder.files)-1 {
 		encoder.buffer.Write([]byte("]"))
 		encoder.currentIndex++
-		return encoder, true
+		return encoder, 0, true
 	}
 
 	encoder.currentIndex++
@@ -997,7 +1002,7 @@ func (encoder *fileEncoder) NextFile() (io.Reader, bool) {
 	description, err := json.Marshal(entry)
 	if err != nil {
 		LOG_FATAL("SNAPSHOT_ENCODE", "Failed to encode file %s: %v", encoder.files[encoder.currentIndex].Path, err)
-		return nil, false
+		return nil, 0, false
 	}
 
 	if encoder.readAttributes {
@@ -1008,7 +1013,8 @@ func (encoder *fileEncoder) NextFile() (io.Reader, bool) {
 		encoder.buffer.Write([]byte(","))
 	}
 	encoder.buffer.Write(description)
-	return encoder, true
+	currentFileSize := encoder.files[encoder.currentIndex].Size
+	return encoder, currentFileSize, true
 }
 
 // UploadSnapshot uploads the specified snapshot to the storage. It turns Files, ChunkHashes, and ChunkLengths into
@@ -1041,7 +1047,7 @@ func (manager *BackupManager) UploadSnapshot(chunkMaker *ChunkMaker, uploader *C
 
 	// uploadSequenceFunc uploads chunks read from 'reader'.
 	uploadSequenceFunc := func(reader io.Reader,
-		nextReader func(size int64, hash string) (io.Reader, bool)) (sequence []string) {
+		nextReader func(size int64, hash string) (io.Reader, int64, bool)) (sequence []string) {
 
 		chunkMaker.ForEachChunk(reader,
 			func(chunk *Chunk, final bool) {
@@ -1076,8 +1082,8 @@ func (manager *BackupManager) UploadSnapshot(chunkMaker *ChunkMaker, uploader *C
 		}
 
 		sequence := uploadSequenceFunc(bytes.NewReader(contents),
-			func(fileSize int64, hash string) (io.Reader, bool) {
-				return nil, false
+			func(fileSize int64, hash string) (io.Reader, int64, bool) {
+				return nil, 0, false
 			})
 		snapshot.SetSequence(sequenceType, sequence)
 	}
@@ -1095,7 +1101,7 @@ func (manager *BackupManager) UploadSnapshot(chunkMaker *ChunkMaker, uploader *C
 
 		encoder.buffer.Write([]byte("["))
 		sequence := uploadSequenceFunc(encoder,
-			func(fileSize int64, hash string) (io.Reader, bool) {
+			func(fileSize int64, hash string) (io.Reader, int64, bool) {
 				return encoder.NextFile()
 			})
 		snapshot.SetSequence("files", sequence)
@@ -1268,9 +1274,9 @@ func (manager *BackupManager) RestoreFile(chunkDownloader *ChunkDownloader, chun
 					lengthMap[hash] = chunkSize
 					offset += int64(chunkSize)
 				},
-				func(fileSize int64, hash string) (io.Reader, bool) {
+				func(fileSize int64, hash string) (io.Reader, int64, bool) {
 					fileHash = hash
-					return nil, false
+					return nil, 0, false
 				})
 		}
 		if fileHash == entry.Hash && fileHash != "" {

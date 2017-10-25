@@ -14,6 +14,7 @@ import (
 // ChunkMaker breaks data into chunks using buzhash.  To save memory, the chunk maker only use a circular buffer
 // whose size is double the minimum chunk size.
 type ChunkMaker struct {
+	averageChunkSize int
 	maximumChunkSize int
 	minimumChunkSize int
 	bufferCapacity   int
@@ -46,6 +47,7 @@ func CreateChunkMaker(config *Config, hashOnly bool) *ChunkMaker {
 
 	maker := &ChunkMaker{
 		hashMask:         uint64(config.AverageChunkSize - 1),
+		averageChunkSize: config.AverageChunkSize,
 		maximumChunkSize: config.MaximumChunkSize,
 		minimumChunkSize: config.MinimumChunkSize,
 		bufferCapacity:   2 * config.MinimumChunkSize,
@@ -94,7 +96,7 @@ func (maker *ChunkMaker) buzhashUpdate(sum uint64, out byte, in byte, length int
 // 'nextReader' returns false, it will process remaining data in the buffer and then quit.  When a chunk is identified,
 // it will call 'endOfChunk' to return the chunk size and a boolean flag indicating if it is the last chunk.
 func (maker *ChunkMaker) ForEachChunk(reader io.Reader, endOfChunk func(chunk *Chunk, final bool),
-	nextReader func(size int64, hash string) (io.Reader, bool)) {
+	nextReader func(size int64, hash string) (io.Reader, int64, bool)) {
 
 	maker.bufferStart = 0
 	maker.bufferSize = 0
@@ -167,7 +169,7 @@ func (maker *ChunkMaker) ForEachChunk(reader io.Reader, endOfChunk func(chunk *C
 
 			if isEOF {
 				var ok bool
-				reader, ok = nextReader(fileSize, hex.EncodeToString(fileHasher.Sum(nil)))
+				reader, _, ok = nextReader(fileSize, hex.EncodeToString(fileHasher.Sum(nil)))
 				if !ok {
 					endOfChunk(chunk, true)
 					return
@@ -211,10 +213,16 @@ func (maker *ChunkMaker) ForEachChunk(reader io.Reader, endOfChunk func(chunk *C
 			// if EOF is seen, try to switch to next file and continue
 			if err == io.EOF {
 				var ok bool
-				reader, ok = nextReader(fileSize, hex.EncodeToString(fileHasher.Sum(nil)))
+				var nextFileSize int64
+				reader, nextFileSize, ok = nextReader(fileSize, hex.EncodeToString(fileHasher.Sum(nil)))
 				if !ok {
 					isEOF = true
 				} else {
+					if (nextFileSize > int64(maker.averageChunkSize)) {
+						fill(maker.bufferSize)
+						endOfChunk(chunk, false)
+						startNewChunk()
+					}
 					fileSize = 0
 					fileHasher = maker.config.NewFileHasher()
 					isEOF = false
