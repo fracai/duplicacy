@@ -218,7 +218,7 @@ func (maker *ChunkMaker) ForEachChunk(reader io.Reader, endOfChunk func(chunk *C
 				if !ok {
 					isEOF = true
 				} else {
-					if (nextFileSize > int64(maker.averageChunkSize)) {
+					if nextFileSize > int64(maker.averageChunkSize) {
 						fill(maker.bufferSize)
 						endOfChunk(chunk, false)
 						startNewChunk()

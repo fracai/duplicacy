@@ -541,7 +541,7 @@ func (manager *BackupManager) Backup(top string, quickMode bool, threads int, ta
 				if fileReader.CurrentFile != nil {
 					currentFileStats, statErr := fileReader.CurrentFile.Stat()
 					currentFileSize := int64(0)
-					if (nil == statErr) {
+					if nil == statErr {
 						currentFileSize = currentFileStats.Size()
 					}
 					LOG_TRACE("PACK_START", "Packing %s", fileReader.CurrentEntry.Path)
